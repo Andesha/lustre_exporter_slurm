@@ -23,13 +23,25 @@ async def handle(request):
 @cached(cache=LRUCache(maxsize=100000))
 def get_job_info(jobid):
     # Return the username and account used by this jobid
-    cursor = db.cursor(MySQLdb.cursors.DictCursor)
-    # Since the job table depends on how the slurm cluster was named, we need
-    # to replace the name with format, cursor.execute cannot replace the
-    # table name, only "normal" SQL parameters
-    query_string = "select id_user,account from {} where id_job=%s".format(
-        job_table)
-    cursor.execute(query_string, (jobid,))
+    attempt_count = 0
+    success = False
+    while not success and attempt_count < 4:
+        try:
+            cursor = db.cursor(MySQLdb.cursors.DictCursor)
+            # Since the job table depends on how the slurm cluster was named, we need
+            # to replace the name with format, cursor.execute cannot replace the
+            # table name, only "normal" SQL parameters
+            query_string = "select id_user,account from {} where id_job=%s".format(job_table)
+            cursor.execute(query_string, (jobid,))
+            success = True
+        except MySQLdb._exceptions.OperationalError:
+            # Attempt explicit reconnect
+            db, job_table = db_connect_wrapper()
+            attempt_count += 1
+
+    if not success:
+        raise MySQLdb._exceptions.OperationalError("Attempted MySQL server has gone away fix failure")
+
     result = cursor.fetchone()
     return {
         'user': get_username(result['id_user']),
@@ -100,15 +112,8 @@ def improve_metrics(metrics):
             lines.append(line)
     return lines
 
-if __name__ == '__main__':
-    app = web.Application()
-    app.add_routes([web.get('/{server}', handle)])
-
-    config = configparser.ConfigParser()
-    if len(sys.argv) > 1:
-        config.read(sys.argv[1])
-    else:
-        config.read('config.ini')
+def db_connect_wrapper():
+    # Used to abstract calling connection to db for retries
 
     # autocommit need to be enabled since it affect SELECT queries, without
     # that setting, a snapshot of the table is taken when the script is
@@ -121,6 +126,20 @@ if __name__ == '__main__':
         db=config.get('slurmdb', 'dbname'),
         autocommit=True)
     job_table = config.get('slurmdb', 'job_table')
+
+    return db, job_table
+
+if __name__ == '__main__':
+    app = web.Application()
+    app.add_routes([web.get('/{server}', handle)])
+
+    config = configparser.ConfigParser()
+    if len(sys.argv) > 1:
+        config.read(sys.argv[1])
+    else:
+        config.read('config.ini')
+
+    db, job_table = db_connect_wrapper()
 
     ldap_conn = ldap.initialize(config.get('ldap', 'server'))
     ldap_search_base = config.get('ldap', 'search_base')
