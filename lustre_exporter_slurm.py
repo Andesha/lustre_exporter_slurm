@@ -19,9 +19,6 @@ async def handle(request):
             text = str("\n".join(improve_metrics(metrics)))
     return web.Response(text=text)
 
-# even more global this time
-db, job_table = None, None
-
 @cached(cache=LRUCache(maxsize=100000))
 def get_job_info(jobid):
     # Return the username and account used by this jobid
@@ -38,7 +35,7 @@ def get_job_info(jobid):
             success = True
         except MySQLdb._exceptions.OperationalError:
             # Attempt explicit reconnect
-            db, job_table = db_connect_wrapper()
+            db, job_table = None, None
             attempt_count += 1
 
     if not success:
@@ -114,23 +111,6 @@ def improve_metrics(metrics):
             lines.append(line)
     return lines
 
-def db_connect_wrapper():
-    # Used to abstract calling connection to db for retries
-
-    # autocommit need to be enabled since it affect SELECT queries, without
-    # that setting, a snapshot of the table is taken when the script is
-    # launched so no new jobs are seen.
-    db = MySQLdb.connect(
-        host=config.get('slurmdb', 'host'),
-        port=int(config.get('slurmdb', 'port')),
-        user=config.get('slurmdb', 'user'),
-        password=config.get('slurmdb', 'password'),
-        db=config.get('slurmdb', 'dbname'),
-        autocommit=True)
-    job_table = config.get('slurmdb', 'job_table')
-
-    return db, job_table
-
 if __name__ == '__main__':
     app = web.Application()
     app.add_routes([web.get('/{server}', handle)])
@@ -141,7 +121,14 @@ if __name__ == '__main__':
     else:
         config.read('config.ini')
 
-    db, job_table = db_connect_wrapper()
+    db = MySQLdb.connect(
+        host=config.get('slurmdb', 'host'),
+        port=int(config.get('slurmdb', 'port')),
+        user=config.get('slurmdb', 'user'),
+        password=config.get('slurmdb', 'password'),
+        db=config.get('slurmdb', 'dbname'),
+        autocommit=True)
+    job_table = config.get('slurmdb', 'job_table')
 
     ldap_conn = ldap.initialize(config.get('ldap', 'server'))
     ldap_search_base = config.get('ldap', 'search_base')
