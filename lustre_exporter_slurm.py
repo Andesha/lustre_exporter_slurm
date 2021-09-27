@@ -139,6 +139,7 @@ if __name__ == '__main__':
     else:
         config.read('config.ini')
 
+    db, job_table = None, None
     db, job_table = db_connect_wrapper()
 
     ldap_conn = ldap.initialize(config.get('ldap', 'server'))
